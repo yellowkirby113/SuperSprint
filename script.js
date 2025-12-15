@@ -40,6 +40,8 @@
 		accel: 14.0, // how quickly velocity approaches desired
 		friction: 10.0, // how quickly velocity decays when no input
 		rotationSpeed: 12.0, // how quickly facing rotates towards input direction (0..)
+		lastInputX: 0,
+		lastInputY: 0,
 		walking: false,
 		bob: 0,
 		caught: false,
@@ -120,12 +122,26 @@
 	}
 
 	function update(dt) {
+		// debug: capture previous position to detect unexpected modifications
+		const _prevPlayerX = player.x;
+		const _prevPlayerY = player.y;
+
 		// compute input vector
 		let dx = 0, dy = 0;
 		if (keys.ArrowUp || keys.KeyW) dy -= 1;
 		if (keys.ArrowDown || keys.KeyS) dy += 1;
 		if (keys.ArrowLeft || keys.KeyA) dx -= 1;
 		if (keys.ArrowRight || keys.KeyD) dx += 1;
+
+		// count directional keys pressed
+		const dirKeys = [keys.ArrowUp, keys.KeyW, keys.ArrowDown, keys.KeyS, keys.ArrowLeft, keys.KeyA, keys.ArrowRight, keys.KeyD];
+		const pressedCount = dirKeys.reduce((s, v) => s + (v ? 1 : 0), 0);
+
+		// If many keys pressed and horizontal cancels out, prefer last known input
+		if (pressedCount >= 3 && dx === 0 && dy === 0) {
+			dx = player.lastInputX;
+			dy = player.lastInputY;
+		}
 
 		const moving = dx !== 0 || dy !== 0;
 		player.walking = moving;
@@ -137,6 +153,10 @@
 			// desired velocity
 			desiredVx = dx * player.speed;
 			desiredVy = dy * player.speed;
+
+			// remember last input direction
+			player.lastInputX = dx;
+			player.lastInputY = dy;
 
 			// smooth rotate towards desired facing direction
 			const desiredAngle = Math.atan2(dy, dx);
@@ -160,6 +180,10 @@
 		// apply velocity to position
 		player.x += player.vx * dt;
 		player.y += player.vy * dt;
+
+		// small-velocity deadzone to avoid jitter
+		if (Math.abs(player.vx) < 0.5) player.vx = 0;
+		if (Math.abs(player.vy) < 0.5) player.vy = 0;
 
 		// bobbing scales with movement speed
 		const speedFactor = Math.hypot(player.vx, player.vy) / (player.speed || 1);
@@ -231,6 +255,11 @@
 			swingOffset = (swingProgress - 0.5) * Math.PI * 0.9;
 		}
 
+		// Save player's position and restore after hit processing to avoid
+		// accidental modifications during knockback/hit logic.
+		const _savedPlayerX = player.x;
+		const _savedPlayerY = player.y;
+
 		for (let enemy of enemies) {
 			const ex = enemy.x - player.x;
 			const ey = enemy.y - player.y;
@@ -259,6 +288,10 @@
 					console.log('Hit! Enemy HP:', enemy.health);
 				}
 			}
+
+		// Restore player position in case any logic accidentally modified it.
+		player.x = _savedPlayerX;
+		player.y = _savedPlayerY;
 		}
 
 		// Keep inside canvas boundaries
@@ -266,6 +299,38 @@
 		const h = canvas.height / (window.devicePixelRatio || 1);
 		player.x = clamp(player.x, player.size + 4, w - player.size - 4);
 		player.y = clamp(player.y, player.size + 4, h - player.size - 4);
+
+		// Debug: if attacking, check whether final position matches expected
+		if (player.isAttacking) {
+			const expectedX = _prevPlayerX + player.vx * dt;
+			const expectedY = _prevPlayerY + player.vy * dt;
+			const dxErr = Math.abs(player.x - expectedX);
+			const dyErr = Math.abs(player.y - expectedY);
+			if (dxErr > 0.5 || dyErr > 0.5) {
+				console.warn('Unexpected player position change during attack', {
+					prevX: _prevPlayerX, prevY: _prevPlayerY,
+					expectedX, expectedY,
+					actualX: player.x, actualY: player.y,
+					dxErr, dyErr,
+					playerVx: player.vx, playerVy: player.vy,
+					playerIsAttacking: player.isAttacking,
+					attackTimer: player.attackTimer,
+					enemies: enemies.map(e=>({x:Math.round(e.x),y:Math.round(e.y),hp:e.health}))
+				});
+			}
+		}
+
+		// If we hit a horizontal bound and velocity pushes us beyond, stop horizontal velocity
+		const leftBound = player.size + 4;
+		const rightBound = w - player.size - 4;
+		if ((player.x <= leftBound && player.vx < 0) || (player.x >= rightBound && player.vx > 0)) {
+			player.vx = 0;
+		}
+		const topBound = player.size + 4;
+		const bottomBound = h - player.size - 4;
+		if ((player.y <= topBound && player.vy < 0) || (player.y >= bottomBound && player.vy > 0)) {
+			player.vy = 0;
+		}
 	}
 
 	function drawChingling() {
