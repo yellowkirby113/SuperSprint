@@ -28,6 +28,18 @@
 	playerImage.onload = () => { imageReady = true; };
 	playerImage.onerror = () => { console.error('Falha ao carregar Chingling.png'); };
 
+	// Load background image
+	const bgImage = new Image();
+	bgImage.src = 'BG.png';
+	bgImage.onload = () => { console.log('Background loaded successfully'); };
+	bgImage.onerror = () => { console.error('Falha ao carregar BG.png'); };
+
+	// Load enemy image
+	const enemyImage = new Image();
+	enemyImage.src = 'enemy.png';
+	enemyImage.onload = () => { console.log('Enemy image loaded successfully'); };
+	enemyImage.onerror = () => { console.error('Falha ao carregar enemy.png'); };
+
 	// Player state
 	const player = {
 		x: canvas.width / 2 / (window.devicePixelRatio || 1),
@@ -47,6 +59,7 @@
 		isAttacking: false,
 		attackTimer: 0,
 		attackDuration: 0.3,
+		attackAngle: 0, // direction player is attacking
 		swordReach: 65,
 		swordWidth: 12,
 		attackId: 0,
@@ -81,6 +94,10 @@
 	enemies.push(createEnemy(player.x - 140, player.y + 100));
 	enemies.push(createEnemy(player.x + 100, player.y - 120));
 
+	// Enemy spawn timer
+	let spawnTimer = 0;
+	const spawnInterval = 5; // seconds
+
 	// Input
 	const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
 
@@ -89,6 +106,7 @@
 		if (e.code === 'Space' && !player.isAttacking && !player.caught) { 
 			player.isAttacking = true; 
 			player.attackTimer = player.attackDuration;
+			player.attackAngle = player.angle; // Store the direction at attack start
 			player.attackId++;
 			e.preventDefault(); 
 		}
@@ -130,36 +148,24 @@
 		const moving = dx !== 0 || dy !== 0;
 		player.walking = moving;
 
-		let desiredVx = 0, desiredVy = 0;
-		if (moving) {
+		if (moving && !player.caught) {
 			const len = Math.hypot(dx, dy) || 1;
 			dx /= len; dy /= len;
-			// desired velocity
-			desiredVx = dx * player.speed;
-			desiredVy = dy * player.speed;
-
-			// smooth rotate towards desired facing direction
-			const desiredAngle = Math.atan2(dy, dx);
-			const aDiff = normalizeAngle(desiredAngle - player.angle);
-			// lerp by portion determined by rotationSpeed*dt (clamped)
-			const rotT = Math.min(1, player.rotationSpeed * dt);
-			player.angle = normalizeAngle(player.angle + aDiff * rotT);
+			
+			// Update position directly with smooth movement
+			player.x += dx * player.speed * dt;
+			player.y += dy * player.speed * dt;
+			
+			// Update angle to face direction
+			player.angle = Math.atan2(dy, dx);
 		}
 
-		// accelerate velocity towards desired velocity (or to 0 if no input)
-		const accelT = Math.min(1, player.accel * dt);
-		const frictionT = Math.min(1, player.friction * dt);
-		if (moving && !player.caught) {
-			player.vx = lerp(player.vx, desiredVx, accelT);
-			player.vy = lerp(player.vy, desiredVy, accelT);
+		// apply velocity bobbing effect
+		if (moving) {
+			player.bob += dt * 12;
 		} else {
-			player.vx = lerp(player.vx, 0, frictionT);
-			player.vy = lerp(player.vy, 0, frictionT);
+			player.bob *= 0.85;
 		}
-
-		// apply velocity to position
-		player.x += player.vx * dt;
-		player.y += player.vy * dt;
 
 		// bobbing scales with movement speed
 		const speedFactor = Math.hypot(player.vx, player.vy) / (player.speed || 1);
@@ -237,8 +243,8 @@
 			const edist = Math.hypot(ex, ey);
 			const enormAngle = Math.atan2(ey, ex);
 
-			// Use the player's current facing plus the swing offset for hit tests
-			const effectiveAngle = player.angle + swingOffset;
+			// Use the attack angle plus the swing offset for hit tests
+			const effectiveAngle = player.attackAngle + swingOffset;
 			let angleDiff = Math.abs(effectiveAngle - enormAngle);
 			const normalizedDiff = Math.min(angleDiff, Math.PI * 2 - angleDiff);
 
@@ -266,6 +272,30 @@
 		const h = canvas.height / (window.devicePixelRatio || 1);
 		player.x = clamp(player.x, player.size + 4, w - player.size - 4);
 		player.y = clamp(player.y, player.size + 4, h - player.size - 4);
+
+		// Spawn new enemies every 5 seconds
+		spawnTimer += dt;
+		if (spawnTimer >= spawnInterval) {
+			spawnTimer = 0;
+			// Spawn enemy at random edge of screen
+			const side = Math.floor(Math.random() * 4);
+			let spawnX, spawnY;
+			if (side === 0) { // top
+				spawnX = Math.random() * w;
+				spawnY = -20;
+			} else if (side === 1) { // right
+				spawnX = w + 20;
+				spawnY = Math.random() * h;
+			} else if (side === 2) { // bottom
+				spawnX = Math.random() * w;
+				spawnY = h + 20;
+			} else { // left
+				spawnX = -20;
+				spawnY = Math.random() * h;
+			}
+			enemies.push(createEnemy(spawnX, spawnY));
+			console.log('New enemy spawned! Total enemies:', enemies.length);
+		}
 	}
 
 	function drawChingling() {
@@ -301,12 +331,18 @@
 		const w = canvas.width / (window.devicePixelRatio || 1);
 		const h = canvas.height / (window.devicePixelRatio || 1);
 		ctx.clearRect(0, 0, w, h);
-		// background vignette
-		const g = ctx.createLinearGradient(0, 0, 0, h);
-		g.addColorStop(0, '#2a333b');
-		g.addColorStop(1, '#1b2024');
-		ctx.fillStyle = g;
-		ctx.fillRect(0, 0, w, h);
+		
+		// Draw background image if loaded, otherwise draw fallback gradient
+		if (bgImage.complete) {
+			ctx.drawImage(bgImage, 0, 0, w, h);
+		} else {
+			// fallback gradient background
+			const g = ctx.createLinearGradient(0, 0, 0, h);
+			g.addColorStop(0, '#2a333b');
+			g.addColorStop(1, '#1b2024');
+			ctx.fillStyle = g;
+			ctx.fillRect(0, 0, w, h);
+		}
 
 		drawGrid();
 
@@ -318,14 +354,22 @@
 				ctx.rotate(enemy.angle);
 				// pulse when near
 				const pulse = 1 + Math.sin(enemy.pulse) * 0.04;
-				ctx.beginPath();
-				const ec = player.caught ? enemy.alertColor : enemy.color;
-				ctx.fillStyle = ec;
-				ctx.arc(0, 0, enemy.size * pulse, 0, Math.PI * 2);
-				ctx.fill();
-				// eye/mark
-				ctx.fillStyle = '#2b0b0b';
-				ctx.beginPath(); ctx.arc(enemy.size - 6, -4, 3, 0, Math.PI * 2); ctx.fill();
+				
+				// Draw enemy image if loaded, otherwise draw fallback circle
+				if (enemyImage.complete) {
+					const size = enemy.size * 2.2 * pulse;
+					ctx.drawImage(enemyImage, -size / 2, -size / 2, size, size);
+				} else {
+					// Fallback: red circle
+					ctx.beginPath();
+					const ec = player.caught ? enemy.alertColor : enemy.color;
+					ctx.fillStyle = ec;
+					ctx.arc(0, 0, enemy.size * pulse, 0, Math.PI * 2);
+					ctx.fill();
+					// eye/mark
+					ctx.fillStyle = '#2b0b0b';
+					ctx.beginPath(); ctx.arc(enemy.size - 6, -4, 3, 0, Math.PI * 2); ctx.fill();
+				}
 				ctx.restore();
 			}
 		}
@@ -343,8 +387,9 @@
 			ctx.rotate(Math.sin(player.bob) * 0.1);
 		}
 
-		// Rotate towards facing direction
-		ctx.rotate(player.angle);
+		// Rotate towards facing direction or attack direction if attacking
+		const displayAngle = player.isAttacking ? player.attackAngle : player.angle;
+		ctx.rotate(displayAngle);
 
 		// Draw Chingling sprite
 		drawChingling();
