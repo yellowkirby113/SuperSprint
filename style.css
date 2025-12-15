@@ -1,0 +1,21 @@
+:root{
+	--bg:#1e1f26;
+	--panel:#2b2d38;
+	--accent:#6ad0ff;
+	--text:#e6eef6;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;font-family:Segoe UI, Roboto, Arial, sans-serif;background:var(--bg);color:var(--text)}
+main{display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px}
+h1{font-size:18px;margin:0;color:var(--accent)}
+canvas#game{background:linear-gradient(180deg,#26303b 0%, #1c2026 100%);border:4px solid rgba(255,255,255,0.03);box-shadow:0 6px 18px rgba(0,0,0,0.6);border-radius:6px;display:block}
+.hint{color:rgba(230,238,246,0.9);font-size:13px;opacity:0.9}
+
+/* Make canvas responsive but constrained */
+@media (min-width:600px){
+	canvas#game{width:800px;height:600px}
+}
+@media (max-width:599px){
+	canvas#game{width:calc(100vw - 40px);height:calc((100vw - 40px) * 0.75)}
+}
+
