@@ -96,7 +96,7 @@
 
 	// Enemy spawn timer
 	let spawnTimer = 0;
-	const spawnInterval = 5; // seconds
+	const spawnInterval = 1.5; // seconds
 
 	// Input
 	const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
@@ -400,7 +400,7 @@
 			const swingAngle = (swingProgress - 0.5) * Math.PI * 0.9;
 			ctx.save();
 			ctx.rotate(swingAngle);
-			ctx.strokeStyle = '#ffd700';
+			ctx.strokeStyle = '#ffffff';
 			ctx.lineWidth = player.swordWidth;
 			ctx.lineCap = 'round';
 			ctx.beginPath();
