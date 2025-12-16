@@ -52,6 +52,8 @@
 		accel: 14.0, // how quickly velocity approaches desired
 		friction: 10.0, // how quickly velocity decays when no input
 		rotationSpeed: 12.0, // how quickly facing rotates towards input direction (0..)
+		lastInputX: 0,
+		lastInputY: 0,
 		walking: false,
 		bob: 0,
 		caught: false,
@@ -138,12 +140,26 @@
 	}
 
 	function update(dt) {
+		// debug: capture previous position to detect unexpected modifications
+		const _prevPlayerX = player.x;
+		const _prevPlayerY = player.y;
+
 		// compute input vector
 		let dx = 0, dy = 0;
 		if (keys.ArrowUp || keys.KeyW) dy -= 1;
 		if (keys.ArrowDown || keys.KeyS) dy += 1;
 		if (keys.ArrowLeft || keys.KeyA) dx -= 1;
 		if (keys.ArrowRight || keys.KeyD) dx += 1;
+
+		// count directional keys pressed
+		const dirKeys = [keys.ArrowUp, keys.KeyW, keys.ArrowDown, keys.KeyS, keys.ArrowLeft, keys.KeyA, keys.ArrowRight, keys.KeyD];
+		const pressedCount = dirKeys.reduce((s, v) => s + (v ? 1 : 0), 0);
+
+		// If many keys pressed and horizontal cancels out, prefer last known input
+		if (pressedCount >= 3 && dx === 0 && dy === 0) {
+			dx = player.lastInputX;
+			dy = player.lastInputY;
+		}
 
 		const moving = dx !== 0 || dy !== 0;
 		player.walking = moving;
@@ -156,6 +172,10 @@
 			player.x += dx * player.speed * dt;
 			player.y += dy * player.speed * dt;
 			
+			// remember last input direction
+			player.lastInputX = dx;
+			player.lastInputY = dy;
+
 			// Update angle to face direction
 			player.angle = Math.atan2(dy, dx);
 		}
@@ -166,6 +186,10 @@
 		} else {
 			player.bob *= 0.85;
 		}
+
+		// apply velocity to position
+		player.x += player.vx * dt;
+		player.y += player.vy * dt;
 
 		// bobbing scales with movement speed
 		const speedFactor = Math.hypot(player.vx, player.vy) / (player.speed || 1);
@@ -237,6 +261,11 @@
 			swingOffset = (swingProgress - 0.5) * Math.PI * 0.9;
 		}
 
+		// Save player's position and restore after hit processing to avoid
+		// accidental modifications during knockback/hit logic.
+		const _savedPlayerX = player.x;
+		const _savedPlayerY = player.y;
+
 		for (let enemy of enemies) {
 			const ex = enemy.x - player.x;
 			const ey = enemy.y - player.y;
@@ -265,6 +294,10 @@
 					console.log('Hit! Enemy HP:', enemy.health);
 				}
 			}
+
+		// Restore player position in case any logic accidentally modified it.
+		player.x = _savedPlayerX;
+		player.y = _savedPlayerY;
 		}
 
 		// Keep inside canvas boundaries
@@ -272,30 +305,6 @@
 		const h = canvas.height / (window.devicePixelRatio || 1);
 		player.x = clamp(player.x, player.size + 4, w - player.size - 4);
 		player.y = clamp(player.y, player.size + 4, h - player.size - 4);
-
-		// Spawn new enemies every 5 seconds
-		spawnTimer += dt;
-		if (spawnTimer >= spawnInterval) {
-			spawnTimer = 0;
-			// Spawn enemy at random edge of screen
-			const side = Math.floor(Math.random() * 4);
-			let spawnX, spawnY;
-			if (side === 0) { // top
-				spawnX = Math.random() * w;
-				spawnY = -20;
-			} else if (side === 1) { // right
-				spawnX = w + 20;
-				spawnY = Math.random() * h;
-			} else if (side === 2) { // bottom
-				spawnX = Math.random() * w;
-				spawnY = h + 20;
-			} else { // left
-				spawnX = -20;
-				spawnY = Math.random() * h;
-			}
-			enemies.push(createEnemy(spawnX, spawnY));
-			console.log('New enemy spawned! Total enemies:', enemies.length);
-		}
 	}
 
 	function drawChingling() {
