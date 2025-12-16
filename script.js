@@ -70,6 +70,8 @@
 		damageOnHit: 10,
 		lastHitTimer: 0,
 		hitCooldown: 0.5
+		,knockbackTimer: 0,
+		knockbackDuration: 0.2,
 	};
 
 	// Enemies array
@@ -79,7 +81,7 @@
 			x: x,
 			y: y,
 			size: 20,
-			speed: 90,
+			speed: 120,
 			angle: 0,
 			color: '#ff6b6b',
 			alertColor: '#ff3b3b',
@@ -99,6 +101,20 @@
 	// Enemy spawn timer
 	let spawnTimer = 0;
 	const spawnInterval = 1.5; // seconds
+
+	// Spawn control
+	let spawnEnabled = true; // toggle to stop spawning entirely
+	const maxEnemies = 1000000; // maximum simultaneous enemies
+
+	// Game timer (seconds)
+	let gameTime = 0;
+
+	function formatTime(s) {
+		const total = Math.max(0, Math.floor(s));
+		const minutes = Math.floor(total / 60);
+		const seconds = total % 60;
+		return String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+	}
 
 	// Input
 	const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
@@ -140,6 +156,8 @@
 	}
 
 	function update(dt) {
+		// advance game timer if player still alive
+		if (player.health > 0) gameTime += dt;
 		// debug: capture previous position to detect unexpected modifications
 		const _prevPlayerX = player.x;
 		const _prevPlayerY = player.y;
@@ -164,20 +182,23 @@
 		const moving = dx !== 0 || dy !== 0;
 		player.walking = moving;
 
-		if (moving && !player.caught) {
-			const len = Math.hypot(dx, dy) || 1;
-			dx /= len; dy /= len;
-			
-			// Update position directly with smooth movement
-			player.x += dx * player.speed * dt;
-			player.y += dy * player.speed * dt;
-			
-			// remember last input direction
-			player.lastInputX = dx;
-			player.lastInputY = dy;
-
-			// Update angle to face direction
-			player.angle = Math.atan2(dy, dx);
+		// If player is knocked back, ignore movement input until knockback ends
+		if (player.knockbackTimer <= 0) {
+			if (moving && !player.caught) {
+				const len = Math.hypot(dx, dy) || 1;
+				dx /= len; dy /= len;
+				// Update position directly with smooth movement
+				player.x += dx * player.speed * dt;
+				player.y += dy * player.speed * dt;
+				// remember last input direction
+				player.lastInputX = dx;
+				player.lastInputY = dy;
+				// Update angle to face direction
+				player.angle = Math.atan2(dy, dx);
+			}
+		} else {
+			// still in knockback: decrement timer (knockback movement handled via vx/vy below)
+			player.knockbackTimer = Math.max(0, player.knockbackTimer - dt);
 		}
 
 		// apply velocity bobbing effect
@@ -187,9 +208,17 @@
 			player.bob *= 0.85;
 		}
 
-		// apply velocity to position
+		// apply velocity to position (includes knockback)
 		player.x += player.vx * dt;
 		player.y += player.vy * dt;
+
+		// If knockback just ended, zero out velocities so movement can resume cleanly
+		if (player.knockbackTimer <= 0 && (Math.abs(player.vx) > 0 || Math.abs(player.vy) > 0)) {
+			// only zero velocities if they were from knockback (we don't track source precisely,
+			// but when knockbackTimer is 0 it's safe to clear lingering impulse)
+			player.vx = 0;
+			player.vy = 0;
+		}
 
 		// bobbing scales with movement speed
 		const speedFactor = Math.hypot(player.vx, player.vy) / (player.speed || 1);
@@ -200,33 +229,98 @@
 		}
 
 		// Enemy AI and collision check for all enemies
-		for (let enemy of enemies) {
-			// Enemy AI: simple pursuit towards player
+		for (let i = 0; i < enemies.length; i++) {
+			const enemy = enemies[i];
+			// Enemy AI: pursuit towards player with simple separation to avoid clumping
 			const ex = player.x - enemy.x;
 			const ey = player.y - enemy.y;
 			const edist = Math.hypot(ex, ey) || 1;
-			const enx = ex / edist;
-			const eny = ey / edist;
+			let enx = ex / edist;
+			let eny = ey / edist;
+			// separation from nearby enemies
+			let sepX = 0, sepY = 0;
+			let neighbors = 0;
+			// separation radius (around enemy) to avoid tight clumping
+			const sepRadius = enemy.size * 1.1;
+			for (let j = 0; j < enemies.length; j++) {
+				if (j === i) continue;
+				const other = enemies[j];
+				if (other.health <= 0) continue;
+				const dx = enemy.x - other.x;
+				const dy = enemy.y - other.y;
+				const d = Math.hypot(dx, dy) || 1;
+				if (d < sepRadius && d > 0) {
+					sepX += dx / d;
+					sepY += dy / d;
+					neighbors++;
+				}
+			}
+			if (neighbors > 0) {
+				sepX /= neighbors; sepY /= neighbors;
+				let sepStrength = 0.35; // base strength so pursuit dominates
+				// Reduce separation when enemy is close to player so it can reach from any side.
+				const closeDist = enemy.size * 1.2;
+				const farDist = enemy.size * 4.0;
+				const distFactor = clamp((edist - closeDist) / (farDist - closeDist), 0, 1);
+				sepStrength *= distFactor; // sep only applies strongly when far from player
+				// Make separation act mostly laterally: project separation onto the perpendicular
+				// of the pursuit vector so it doesn't push enemies directly away from the player.
+				const perpX = -eny;
+				const perpY = enx;
+				// component of sep along perpendicular
+				const sideComp = sepX * perpX + sepY * perpY;
+				sepX = perpX * sideComp;
+				sepY = perpY * sideComp;
+				// normalize separation to keep strength predictable
+				const sLen = Math.hypot(sepX, sepY) || 1;
+				sepX /= sLen; sepY /= sLen;
+				// compute candidate direction if we applied lateral separation
+				const candX = enx + sepX * sepStrength;
+				const candY = eny + sepY * sepStrength;
+				const candLen = Math.hypot(candX, candY) || 1;
+				// predict distance to player after a small step along candidate
+				const step = enemy.speed * dt;
+				const nx = enemy.x + (candX / candLen) * step;
+				const ny = enemy.y + (candY / candLen) * step;
+				const newDist = Math.hypot(player.x - nx, player.y - ny);
+				// If candidate would increase distance to player, ignore separation
+				if (newDist > edist + 0.5) {
+					// skip separation this frame so enemy can still approach
+					// (leave enx/eny as pure pursuit)
+				} else {
+					// combine pursuit + lateral separation
+					enx = candX / candLen;
+					eny = candY / candLen;
+				}
+			}
+			// normalize final direction
+			const len = Math.hypot(enx, eny) || 1;
+			enx /= len; eny /= len;
 			enemy.angle = Math.atan2(eny, enx);
 			// move enemy
 			enemy.x += enx * enemy.speed * dt;
 			enemy.y += eny * enemy.speed * dt;
 			enemy.pulse += dt * 6;
 
-			// Collision check - only if enemy is alive
+			// Collision check and damage with knockback (no 'caught' state)
 			const collideDist = player.size + enemy.size - 2;
-			if (edist < collideDist && !player.caught && enemy.health > 0) {
-				player.caught = true;
-				player.caughtTimer = 1.6;
-			}
-
-			// Damage from enemy collision (with cooldown) - only if enemy is alive
 			if (edist < collideDist && enemy.health > 0) {
+				// damage cooldown
 				player.lastHitTimer -= dt;
 				if (player.lastHitTimer <= 0) {
+					// apply damage
 					player.health -= player.damageOnHit;
 					player.lastHitTimer = player.hitCooldown;
 					if (player.health < 0) player.health = 0;
+					// knockback away from enemy
+					const dirx = (player.x - enemy.x) / (edist || 1);
+					const diry = (player.y - enemy.y) / (edist || 1);
+					const knockbackForce = 100;
+					// set knockback velocity (overwrite so repeated hits reset the effect)
+					player.vx = dirx * knockbackForce;
+					player.vy = diry * knockbackForce;
+					// start knockback timer (knockback lasts player.knockbackDuration seconds)
+					player.knockbackTimer = player.knockbackDuration;
 				}
 			} else {
 				player.lastHitTimer = Math.max(0, player.lastHitTimer - dt);
@@ -237,6 +331,13 @@
 			const h = canvas.height / (window.devicePixelRatio || 1);
 			enemy.x = clamp(enemy.x, enemy.size + 4, w - enemy.size - 4);
 			enemy.y = clamp(enemy.y, enemy.size + 4, h - enemy.size - 4);
+		}
+
+		// Remove dead enemies from the array to avoid unbounded growth
+		for (let i = enemies.length - 1; i >= 0; i--) {
+			if (enemies[i].health <= 0) {
+				enemies.splice(i, 1);
+			}
 		}
 
 		if (player.caught) {
@@ -305,6 +406,36 @@
 		const h = canvas.height / (window.devicePixelRatio || 1);
 		player.x = clamp(player.x, player.size + 4, w - player.size - 4);
 		player.y = clamp(player.y, player.size + 4, h - player.size - 4);
+
+		// Controlled enemy spawning: spawn at fixed interval up to maxEnemies
+		if (spawnEnabled) {
+			spawnTimer += dt;
+			let activeCount = enemies.reduce((s, e) => s + (e.health > 0 ? 1 : 0), 0);
+			// safety cap for total array size to avoid runaway memory growth
+			const maxTotalEnemies = Math.max(100, maxEnemies * 4);
+			// spawn while there's accumulated time (handles lag) but limit spawns per frame
+			let spawnsThisFrame = 0;
+			while (spawnTimer >= spawnInterval && spawnsThisFrame < 3) {
+				spawnTimer -= spawnInterval;
+				spawnsThisFrame++;
+				if (activeCount >= maxEnemies) break; // respect active enemy cap
+				if (enemies.length >= maxTotalEnemies) break; // safety total cap
+				// spawn at a random edge position, away from player
+				const margin = 40;
+				const edge = Math.floor(Math.random() * 4);
+				let sx = margin, sy = margin;
+				if (edge === 0) { // top
+					sx = Math.random() * (w - margin * 2) + margin; sy = -20 + margin; }
+				else if (edge === 1) { // right
+					sx = w + 20 - margin; sy = Math.random() * (h - margin * 2) + margin; }
+				else if (edge === 2) { // bottom
+					sx = Math.random() * (w - margin * 2) + margin; sy = h + 20 - margin; }
+				else { // left
+					sx = -20 + margin; sy = Math.random() * (h - margin * 2) + margin; }
+				enemies.push(createEnemy(sx, sy));
+				activeCount++;
+			}
+		}
 	}
 
 	function drawChingling() {
@@ -423,7 +554,11 @@
 		// HUD: coordinates + health + caught state
 		ctx.fillStyle = 'rgba(255,255,255,0.9)';
 		ctx.font = '13px Segoe UI, Roboto, Arial';
-		ctx.fillText(`x: ${Math.round(player.x)}, y: ${Math.round(player.y)}`, 12, 20);
+		// draw top-center game timer
+		ctx.textAlign = 'center';
+		ctx.fillText(formatTime(gameTime), w / 2, 20);
+		ctx.textAlign = 'left';
+		ctx.fillText(`x: ${Math.round(player.x)}, y: ${Math.round(player.y)}`, 12, 40);
 		
 		// Health bar
 		const healthBarWidth = 150;
