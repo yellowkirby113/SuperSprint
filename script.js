@@ -69,8 +69,10 @@
 		maxHealth: 100,
 		damageOnHit: 10,
 		lastHitTimer: 0,
-		hitCooldown: 0.5
-		,knockbackTimer: 0,
+		hitCooldown: 0.5,
+		invincibilityFrames: 0,
+		invincibilityDuration: 1.2,
+		knockbackTimer: 0,
 		knockbackDuration: 0.2,
 	};
 
@@ -161,6 +163,9 @@
 	function update(dt) {
 		// advance game timer if player still alive
 		if (player.health > 0) gameTime += dt;
+		
+		// Decrement invincibility frames
+		player.invincibilityFrames = Math.max(0, player.invincibilityFrames - dt);
 		// debug: capture previous position to detect unexpected modifications
 		const _prevPlayerX = player.x;
 		const _prevPlayerY = player.y;
@@ -234,99 +239,99 @@
 		// Enemy AI and collision check for all enemies
 		for (let i = 0; i < enemies.length; i++) {
 			const enemy = enemies[i];
-			// Enemy AI: pursuit towards player with simple separation to avoid clumping
-			const ex = player.x - enemy.x;
-			const ey = player.y - enemy.y;
-			const edist = Math.hypot(ex, ey) || 1;
-			let enx = ex / edist;
-			let eny = ey / edist;
-			// separation from nearby enemies
-			let sepX = 0, sepY = 0;
-			let neighbors = 0;
-			// separation radius (around enemy) to avoid tight clumping
-			const sepRadius = enemy.size * 1.1;
+			if (enemy.health <= 0) continue;
+			
+			// Calculate direction to player
+			const toPlayerX = player.x - enemy.x;
+			const toPlayerY = player.y - enemy.y;
+			const distToPlayer = Math.hypot(toPlayerX, toPlayerY);
+			
+			// Always move toward player first
+			let moveX = 0;
+			let moveY = 0;
+			
+			if (distToPlayer > 0.1) {
+				moveX = toPlayerX / distToPlayer;
+				moveY = toPlayerY / distToPlayer;
+			}
+			
+			// Very light separation: only prevent direct collision stacking
+			let pushX = 0;
+			let pushY = 0;
+			let pushCount = 0;
+			
 			for (let j = 0; j < enemies.length; j++) {
-				if (j === i) continue;
+				if (i === j) continue;
 				const other = enemies[j];
 				if (other.health <= 0) continue;
+				
 				const dx = enemy.x - other.x;
 				const dy = enemy.y - other.y;
-				const d = Math.hypot(dx, dy) || 1;
-				if (d < sepRadius && d > 0) {
-					sepX += dx / d;
-					sepY += dy / d;
-					neighbors++;
+				const distToOther = Math.hypot(dx, dy);
+				
+				// Only separate if nearly touching
+				const minDist = enemy.size * 2.2;
+				if (distToOther > 0.1 && distToOther < minDist) {
+					// Gentle push away
+					pushX += (dx / distToOther);
+					pushY += (dy / distToOther);
+					pushCount++;
 				}
 			}
-			if (neighbors > 0 && collisionsEnabled) {
-				sepX /= neighbors; sepY /= neighbors;
-				let sepStrength = 0.35; // base strength so pursuit dominates
-				// Reduce separation when enemy is close to player so it can reach from any side.
-				const closeDist = enemy.size * 1.2;
-				const farDist = enemy.size * 4.0;
-				const distFactor = clamp((edist - closeDist) / (farDist - closeDist), 0, 1);
-				sepStrength *= distFactor; // sep only applies strongly when far from player
-				// Make separation act mostly laterally: project separation onto the perpendicular
-				// of the pursuit vector so it doesn't push enemies directly away from the player.
-				const perpX = -eny;
-				const perpY = enx;
-				// component of sep along perpendicular
-				const sideComp = sepX * perpX + sepY * perpY;
-				sepX = perpX * sideComp;
-				sepY = perpY * sideComp;
-				// normalize separation to keep strength predictable
-				const sLen = Math.hypot(sepX, sepY) || 1;
-				sepX /= sLen; sepY /= sLen;
-				// compute candidate direction if we applied lateral separation
-				const candX = enx + sepX * sepStrength;
-				const candY = eny + sepY * sepStrength;
-				const candLen = Math.hypot(candX, candY) || 1;
-				// predict distance to player after a small step along candidate
-				const step = enemy.speed * dt;
-				const nx = enemy.x + (candX / candLen) * step;
-				const ny = enemy.y + (candY / candLen) * step;
-				const newDist = Math.hypot(player.x - nx, player.y - ny);
-				// If candidate would increase distance to player, ignore separation
-				if (newDist > edist + 0.5) {
-					// skip separation this frame so enemy can still approach
-					// (leave enx/eny as pure pursuit)
-				} else {
-					// combine pursuit + lateral separation
-					enx = candX / candLen;
-					eny = candY / candLen;
+			
+			// Apply minimal push - only 5% influence to avoid disrupting pursuit
+			if (pushCount > 0) {
+				pushX /= pushCount;
+				pushY /= pushCount;
+				const pushLen = Math.hypot(pushX, pushY);
+				if (pushLen > 0.1) {
+					pushX = (pushX / pushLen) * 0.05;
+					pushY = (pushY / pushLen) * 0.05;
+					moveX += pushX;
+					moveY += pushY;
 				}
 			}
-			// normalize final direction
-			const len = Math.hypot(enx, eny) || 1;
-			enx /= len; eny /= len;
-			enemy.angle = Math.atan2(eny, enx);
-			// move enemy
-			enemy.x += enx * enemy.speed * dt;
-			enemy.y += eny * enemy.speed * dt;
+			
+			// Always ensure we have a valid direction
+			const finalLen = Math.hypot(moveX, moveY);
+			if (finalLen > 0.1) {
+				moveX /= finalLen;
+				moveY /= finalLen;
+			} else if (distToPlayer > 0.1) {
+				// Fallback to pure pursuit if movement became zero
+				moveX = toPlayerX / distToPlayer;
+				moveY = toPlayerY / distToPlayer;
+			}
+			
+			// Update position
+			enemy.x += moveX * enemy.speed * dt;
+			enemy.y += moveY * enemy.speed * dt;
+			
+			// Update angle to face direction of movement
+			enemy.angle = Math.atan2(moveY, moveX);
 			enemy.pulse += dt * 6;
 
-			// Collision check and damage with knockback (no 'caught' state)
-			const collideDist = player.size + enemy.size - 2;
-			if (collisionsEnabled && edist < collideDist && enemy.health > 0) {
-				// damage cooldown
-				player.lastHitTimer -= dt;
-				if (player.lastHitTimer <= 0) {
-					// apply damage
+			// Collision check and damage with knockback
+			const minCollideDist = player.size + enemy.size - 2;
+			if (distToPlayer < minCollideDist && enemy.health > 0) {
+				// Only take damage if not in invincibility frames
+				if (player.invincibilityFrames <= 0) {
+					// Apply damage to player
 					player.health -= player.damageOnHit;
-					player.lastHitTimer = player.hitCooldown;
 					if (player.health < 0) player.health = 0;
-					// knockback away from enemy
-					const dirx = (player.x - enemy.x) / (edist || 1);
-					const diry = (player.y - enemy.y) / (edist || 1);
-					const knockbackForce = 100;
-					// set knockback velocity (overwrite so repeated hits reset the effect)
-					player.vx = dirx * knockbackForce;
-					player.vy = diry * knockbackForce;
-					// start knockback timer (knockback lasts player.knockbackDuration seconds)
-					player.knockbackTimer = player.knockbackDuration;
+					
+					// Start invincibility frames
+					player.invincibilityFrames = player.invincibilityDuration;
+					
+					// Strong knockback player away from enemy
+					if (distToPlayer > 0) {
+						const knockbackDir = Math.atan2(toPlayerY, toPlayerX);
+						const knockbackForce = 200; // increased from 100
+						player.vx = Math.cos(knockbackDir) * knockbackForce;
+						player.vy = Math.sin(knockbackDir) * knockbackForce;
+						player.knockbackTimer = player.knockbackDuration;
+					}
 				}
-			} else if (collisionsEnabled) {
-				player.lastHitTimer = Math.max(0, player.lastHitTimer - dt);
 			}
 
 			// Keep enemy inside canvas
@@ -384,14 +389,15 @@
 			const swordMinReach = player.size * 0.5;
 			const swordMaxReach = player.size + player.swordReach + 10;
 
-			if (edist >= swordMinReach && edist < swordMaxReach && normalizedDiff < Math.PI * 0.4) {
+			// Only knockback and damage if actively attacking
+			if (player.isAttacking && edist >= swordMinReach && edist < swordMaxReach && normalizedDiff < Math.PI * 0.4) {
 				// Knockback enemy along the effective swing direction
 				const knockbackForce = 150;
 				enemy.x += Math.cos(effectiveAngle) * knockbackForce * dt;
 				enemy.y += Math.sin(effectiveAngle) * knockbackForce * dt;
 
 				// Damage enemy only once per attack (using attackId)
-				if (player.isAttacking && enemy.lastHitAttackId !== player.attackId) {
+				if (enemy.lastHitAttackId !== player.attackId) {
 					enemy.health -= 10;
 					enemy.lastHitAttackId = player.attackId;
 					if (enemy.health < 0) enemy.health = 0;
@@ -519,6 +525,17 @@
 
 		// draw player (Chingling) with rotation and effects
 		ctx.save();
+		
+		// Flash effect during invincibility frames
+		if (player.invincibilityFrames > 0) {
+			// Blink every 0.15 seconds
+			const blinkPhase = (player.invincibilityFrames / 0.15) % 2;
+			if (blinkPhase < 1) {
+				// Invisible half the time
+				ctx.globalAlpha = 0.3;
+			}
+		}
+		
 		ctx.translate(player.x, player.y);
 
 		// bobbing effect
