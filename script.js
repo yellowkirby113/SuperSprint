@@ -106,6 +106,9 @@
 	let spawnEnabled = true; // toggle to stop spawning entirely
 	const maxEnemies = 1000000; // maximum simultaneous enemies
 
+	// Toggle collisions (player<->enemy and enemy separation). Set to false to disable collisions.
+	let collisionsEnabled = true;
+
 	// Game timer (seconds)
 	let gameTime = 0;
 
@@ -255,7 +258,7 @@
 					neighbors++;
 				}
 			}
-			if (neighbors > 0) {
+			if (neighbors > 0 && collisionsEnabled) {
 				sepX /= neighbors; sepY /= neighbors;
 				let sepStrength = 0.35; // base strength so pursuit dominates
 				// Reduce separation when enemy is close to player so it can reach from any side.
@@ -304,7 +307,7 @@
 
 			// Collision check and damage with knockback (no 'caught' state)
 			const collideDist = player.size + enemy.size - 2;
-			if (edist < collideDist && enemy.health > 0) {
+			if (collisionsEnabled && edist < collideDist && enemy.health > 0) {
 				// damage cooldown
 				player.lastHitTimer -= dt;
 				if (player.lastHitTimer <= 0) {
@@ -322,7 +325,7 @@
 					// start knockback timer (knockback lasts player.knockbackDuration seconds)
 					player.knockbackTimer = player.knockbackDuration;
 				}
-			} else {
+			} else if (collisionsEnabled) {
 				player.lastHitTimer = Math.max(0, player.lastHitTimer - dt);
 			}
 
