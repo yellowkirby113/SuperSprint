@@ -42,7 +42,7 @@
 
 	// Load Chingling sprite image
 	const playerImage = new Image();
-	playerImage.src = 'Chingling.png';
+	playerImage.src = 'player.png';
 	let imageReady = false;
 	playerImage.onload = () => { imageReady = true; };
 	playerImage.onerror = () => { console.error('Falha ao carregar Chingling.png'); };
